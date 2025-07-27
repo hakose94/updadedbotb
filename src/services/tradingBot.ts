@@ -1014,7 +1014,7 @@ const entryFee = entryCost * COMMISSION_RATE;
     this.portfolio.availableBalance -= entryCost + entryFee;
     
     console.log(`✅ ${this.config.mode} trade executed: ${action} ${quantity.toFixed(6)} ${symbol} at $${marketData.price.toFixed(2)}`);
-    console.log(`   📊 Market: ${marketCondition.type}, Risk: ${(finalRiskMultiplier * 100).toFixed(0)}%, Confidence: ${signal?.confidence?.toFixed(2) || 'N/A'}`);
+    console.log(`   📊 Mode: ${this.config.tradeMode.toUpperCase()}, Market: ${marketCondition.type}, Risk: ${(finalRiskMultiplier * 100).toFixed(0)}%, Confidence: ${signal?.confidence?.toFixed(2) || 'N/A'}`);
     console.log(`   🎯 Exits: TP1=${exitLevels.tp1.toFixed(2)}, TP2=${exitLevels.tp2.toFixed(2)}, TP3=${exitLevels.tp3.toFixed(2)}, SL=${exitLevels.sl.toFixed(2)}`);
   }
 
