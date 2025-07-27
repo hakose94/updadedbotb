@@ -24,8 +24,11 @@ class BinanceService {
   private apiKey: string;
   private apiSecret: string;
   private baseUrl: string;
+  private futuresBaseUrl: string;
   private testnetUrl: string;
+  private futuresTestnetUrl: string;
   private isTestnet: boolean;
+  private tradeMode: 'spot' | 'futures' = 'futures';
   private wsConnections: Map<string, WebSocket> = new Map();
   private marketDataCache: Map<string, MarketData> = new Map();
   private priceHistory: Map<string, number[]> = new Map();
@@ -52,7 +55,9 @@ class BinanceService {
     this.apiKey = '';
     this.apiSecret = '';
     this.baseUrl = '/binance-api';
+    this.futuresBaseUrl = '/binance-futures-api';
     this.testnetUrl = '/binance-testnet';
+    this.futuresTestnetUrl = '/binance-futures-testnet';
     this.isTestnet = false;
     this.initializeSymbols();
   }
@@ -61,6 +66,11 @@ class BinanceService {
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
     this.isTestnet = useTestnet;
+  }
+
+  setTradeMode(tradeMode: 'spot' | 'futures') {
+    this.tradeMode = tradeMode;
+    console.log(`🔄 Trading mode set to: ${tradeMode.toUpperCase()}`);
   }
 
   private async initializeSymbols() {
@@ -166,11 +176,43 @@ class BinanceService {
   }
 
   private getBaseUrl(): string {
-    return this.isTestnet ? this.testnetUrl : this.baseUrl;
+    if (this.tradeMode === 'futures') {
+      return this.isTestnet ? this.futuresTestnetUrl : this.futuresBaseUrl;
+    } else {
+      return this.isTestnet ? this.testnetUrl : this.baseUrl;
+    }
+  }
+
+  private getApiEndpoint(endpoint: string): string {
+    if (this.tradeMode === 'futures') {
+      // Convert spot endpoints to futures endpoints
+      if (endpoint.includes('/api/v3/order')) {
+        return endpoint.replace('/api/v3/order', '/fapi/v1/order');
+      }
+      if (endpoint.includes('/api/v3/account')) {
+        return endpoint.replace('/api/v3/account', '/fapi/v2/account');
+      }
+      if (endpoint.includes('/api/v3/ticker/price')) {
+        return endpoint.replace('/api/v3/ticker/price', '/fapi/v1/ticker/price');
+      }
+      if (endpoint.includes('/api/v3/ticker/24hr')) {
+        return endpoint.replace('/api/v3/ticker/24hr', '/fapi/v1/ticker/24hr');
+      }
+      if (endpoint.includes('/api/v3/klines')) {
+        return endpoint.replace('/api/v3/klines', '/fapi/v1/klines');
+      }
+      if (endpoint.includes('/api/v3/openOrders')) {
+        return endpoint.replace('/api/v3/openOrders', '/fapi/v1/openOrders');
+      }
+      if (endpoint.includes('/api/v3/exchangeInfo')) {
+        return endpoint.replace('/api/v3/exchangeInfo', '/fapi/v1/exchangeInfo');
+      }
+    }
+    return endpoint;
   }
 
   private async makeRequest(endpoint: string, params: any = {}, method: string = 'GET'): Promise<any> {
-    const requiresAuth = endpoint.includes('/api/v3/order') || endpoint.includes('/api/v3/account') || endpoint.includes('/api/v3/openOrders');
+    const requiresAuth = endpoint.includes('/order') || endpoint.includes('/account') || endpoint.includes('/openOrders');
     
     if (requiresAuth && !this.hasValidCredentials()) {
       throw new Error('API credentials not configured. Please set your Binance API key and secret in the settings.');
@@ -181,7 +223,8 @@ class BinanceService {
       params.recvWindow = 5000;
     }
     
-    const url = `${this.getBaseUrl()}${endpoint}`;
+    const finalEndpoint = this.getApiEndpoint(endpoint);
+    const url = `${this.getBaseUrl()}${finalEndpoint}`;
     const queryString = new URLSearchParams(params).toString();
     
     let finalQueryString = queryString;
@@ -226,7 +269,7 @@ class BinanceService {
 
     const pairs = data
       .filter((ticker: any) =>
-        ticker.symbol.endsWith('USDT') &&
+        (this.tradeMode === 'futures' ? ticker.symbol.endsWith('USDT') : ticker.symbol.endsWith('USDT')) &&
         this.isValidSymbol(ticker.symbol) &&
         !excluded.some(stable => ticker.symbol.startsWith(stable))
       )
@@ -518,9 +561,18 @@ class BinanceService {
   }
 
   async placeTrade(symbol: string, side: 'BUY' | 'SELL', quantity: number, price?: number): Promise<Trade | null> {
+    // Spot mode validation: only allow BUY trades
+    if (this.tradeMode === 'spot' && side === 'SELL') {
+      console.error('SELL trades not allowed in spot mode');
+      return null;
+    }
+
     try {
       // Validate symbol and quantity
-      const validation = this.validateOrderQuantity(symbol, quantity);
+      const validation = this.tradeMode === 'spot' 
+        ? this.validateOrderQuantity(symbol, quantity)
+        : this.validateOrderQuantityAggressive(symbol, quantity);
+        
       if (!validation.valid) {
         console.error(`Order validation failed: ${validation.error}`);
         return null;
@@ -532,6 +584,11 @@ class BinanceService {
         type: price ? 'LIMIT' : 'MARKET',
         quantity: validation.adjustedQty!.toString(),
       };
+
+      // Futures-specific parameters
+      if (this.tradeMode === 'futures') {
+        params.positionSide = side === 'BUY' ? 'LONG' : 'SHORT';
+      }
 
       if (price) {
         params.price = price.toString();
@@ -565,7 +622,9 @@ class BinanceService {
       const data = await this.makeRequest('/api/v3/account');
       
       let totalBalance = 0;
-      if (data.balances) {
+      
+      if (this.tradeMode === 'spot' && data.balances) {
+        // Spot trading: sum all asset balances converted to USDT
         for (const balance of data.balances) {
           if (parseFloat(balance.free) > 0 || parseFloat(balance.locked) > 0) {
             const total = parseFloat(balance.free) + parseFloat(balance.locked);
@@ -581,6 +640,9 @@ class BinanceService {
             }
           }
         }
+      } else if (this.tradeMode === 'futures' && data.totalWalletBalance) {
+        // Futures trading: use totalWalletBalance directly
+        totalBalance = parseFloat(data.totalWalletBalance);
       }
       
       return { totalWalletBalance: totalBalance };

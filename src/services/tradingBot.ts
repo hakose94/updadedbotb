@@ -41,6 +41,7 @@ class TradingBot {
         // Merge with defaults to ensure all fields exist
         const config = {
           mode: savedConfig.mode || 'SIMULATION',
+          tradeMode: savedConfig.tradeMode || 'futures',
           simulationBalance: savedConfig.simulationBalance || 10000,
           fastLearningMode: savedConfig.fastLearningMode || false,
           adaptiveStrategyEnabled: savedConfig.adaptiveStrategyEnabled !== undefined ? savedConfig.adaptiveStrategyEnabled : true,
@@ -95,6 +96,7 @@ class TradingBot {
     logService.info('configLoaded', {}, 'Using default bot configuration');
     return {
       mode: 'SIMULATION',
+      tradeMode: 'futures',
       simulationBalance: 10000,
       fastLearningMode: false,
       adaptiveStrategyEnabled: true,
@@ -175,6 +177,11 @@ class TradingBot {
         config.apiSecret,
         config.mode === 'SIMULATION'
       );
+    }
+    
+    // Update trade mode if provided
+    if (config.tradeMode) {
+      binanceService.setTradeMode(config.tradeMode);
     }
     
     // Update Llama 3 configuration if provided
@@ -876,6 +883,12 @@ class TradingBot {
   }
 
   private async executeTrade(symbol: string, action: 'BUY' | 'SELL', marketData: MarketData, signal?: any, strategy?: any) {
+    // Spot mode: only allow BUY trades
+    if (this.config.tradeMode === 'spot' && action === 'SELL') {
+      console.log(`⚠️ Skipping SELL trade for ${symbol} - not allowed in spot mode`);
+      return;
+    }
+
     // Prevent duplicate positions
     if (this.activePositionIds.has(symbol)) {
       console.log(`⚠️ Skipping ${symbol} - already have position`);
@@ -892,14 +905,20 @@ class TradingBot {
     
     // Apply adaptive risk sizing
     const adaptiveRisk = adaptiveStrategy.getRiskMetrics();
-    const baseRiskMultiplier = this.config.fastLearningMode ? 0.5 : 1;
+    const baseRiskMultiplier = this.config.fastLearningMode ? 0.5 : (this.config.tradeMode === 'spot' ? 0.8 : 1);
     const strategyRiskMultiplier = strategy?.riskMultiplier || 1;
     const adaptiveRiskMultiplier = adaptiveRisk.currentRiskLevel;
     const marketRiskMultiplier = this.getMarketRiskMultiplier(marketCondition);
     
     const finalRiskMultiplier = baseRiskMultiplier * strategyRiskMultiplier * adaptiveRiskMultiplier * marketRiskMultiplier;
-    const riskAmount = this.portfolio.availableBalance * this.config.maxRiskPerTrade * finalRiskMultiplier;
-    const riskMultiplier = this.config.enableAggressiveMode ? 2.0 : 1.0;
+    
+    // Spot mode: more conservative risk management
+    const maxRiskPerTrade = this.config.tradeMode === 'spot' 
+      ? this.config.maxRiskPerTrade * 0.7  // 30% less risk in spot mode
+      : this.config.maxRiskPerTrade;
+      
+    const riskAmount = this.portfolio.availableBalance * maxRiskPerTrade * finalRiskMultiplier;
+    const riskMultiplier = this.config.enableAggressiveMode ? (this.config.tradeMode === 'spot' ? 1.5 : 2.0) : 1.0;
     const quantity = (riskAmount * riskMultiplier) / marketData.price;
 
     
@@ -1000,6 +1019,11 @@ const entryFee = entryCost * COMMISSION_RATE;
   }
 
   private validateTradeEntry(symbol: string, action: 'BUY' | 'SELL', marketData: MarketData, marketCondition: any, signal?: any): { valid: boolean; reason: string } {
+    // Spot mode: only allow BUY trades
+    if (this.config.tradeMode === 'spot' && action === 'SELL') {
+      return { valid: false, reason: 'SPOT_NO_SELL' };
+    }
+
     const { rsi, macd, volumeRatio, emaTrend } = marketData;
     
     // Aggressive mode: Simplified validation based on EMA trend and volume only

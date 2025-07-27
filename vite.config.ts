@@ -18,6 +18,18 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/binance-testnet/, ''),
         secure: true,
       },
+      '/binance-futures-api': {
+        target: 'https://fapi.binance.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/binance-futures-api/, ''),
+        secure: true,
+      },
+      '/binance-futures-testnet': {
+        target: 'https://testnet.binancefuture.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/binance-futures-testnet/, ''),
+        secure: true,
+      },
     },
   },
   optimizeDeps: {
